@@ -12,6 +12,51 @@ import math
 from torch.utils.data import Dataset, DataLoader
 from lib.utils.utils_data import crop_scale
 
+def coco2h36m(x):
+    '''
+    Convert from COCO format (17 keypoints) to H36M format
+    COCO format:
+    0: nose, 1: left_eye, 2: right_eye, 3: left_ear, 4: right_ear
+    5: left_shoulder, 6: right_shoulder, 7: left_elbow, 8: right_elbow
+    9: left_wrist, 10: right_wrist, 11: left_hip, 12: right_hip
+    13: left_knee, 14: right_knee, 15: left_ankle, 16: right_ankle
+    
+    H36M format:
+    0: Hip, 1: RHip, 2: RKnee, 3: RAnkle, 4: LHip, 5: LKnee, 6: LAnkle,
+    7: Spine, 8: Thorax, 9: Nose, 10: Head, 11: LShoulder, 12: LElbow,
+    13: LWrist, 14: RShoulder, 15: RElbow, 16: RWrist
+    '''
+    T, V, C = x.shape
+    y = np.zeros([T, 17, C])
+    
+    # Hip (center of left and right hip)
+    y[:,0,:] = (x[:,11,:] + x[:,12,:]) * 0.5
+    # Right leg
+    y[:,1,:] = x[:,12,:]  # RHip
+    y[:,2,:] = x[:,14,:]  # RKnee  
+    y[:,3,:] = x[:,16,:]  # RAnkle
+    # Left leg
+    y[:,4,:] = x[:,11,:]  # LHip
+    y[:,5,:] = x[:,13,:]  # LKnee
+    y[:,6,:] = x[:,15,:]  # LAnkle
+    # Spine (same as Hip for COCO)
+    y[:,7,:] = (x[:,11,:] + x[:,12,:]) * 0.5
+    # Thorax (center of shoulders)
+    y[:,8,:] = (x[:,5,:] + x[:,6,:]) * 0.5
+    # Head
+    y[:,9,:] = x[:,0,:]   # Nose
+    y[:,10,:] = x[:,0,:]  # Head (use nose as approximation)
+    # Left arm
+    y[:,11,:] = x[:,5,:]  # LShoulder
+    y[:,12,:] = x[:,7,:]  # LElbow
+    y[:,13,:] = x[:,9,:]  # LWrist
+    # Right arm  
+    y[:,14,:] = x[:,6,:]  # RShoulder
+    y[:,15,:] = x[:,8,:]  # RElbow
+    y[:,16,:] = x[:,10,:] # RWrist
+    
+    return y
+
 def halpe2h36m(x):
     '''
         Input: x (T x V x C)  
@@ -74,7 +119,17 @@ def read_input(json_path, vid_size, scale_range, focus):
         kpts = np.array(item['keypoints']).reshape([-1,3])
         kpts_all.append(kpts)
     kpts_all = np.array(kpts_all)
-    kpts_all = halpe2h36m(kpts_all)
+    
+    # Detect the keypoint format and convert accordingly
+    num_keypoints = kpts_all.shape[1]
+    if num_keypoints == 17:
+        print("Detected COCO format (17 keypoints), converting to H36M...")
+        kpts_all = coco2h36m(kpts_all)
+    elif num_keypoints >= 26:
+        print("Detected Halpe format, converting to H36M...")
+        kpts_all = halpe2h36m(kpts_all)
+    else:
+        raise ValueError(f"Unsupported keypoint format with {num_keypoints} keypoints. Expected 17 (COCO) or 26+ (Halpe).")
     if vid_size:
         w, h = vid_size
         scale = min(w,h) / 2.0

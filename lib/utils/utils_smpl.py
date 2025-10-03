@@ -4,9 +4,16 @@
 import torch
 import numpy as np
 import os.path as osp
-from smplx import SMPL as _SMPL
-from smplx.utils import ModelOutput, SMPLOutput
-from smplx.lbs import vertices2joints
+
+# Try to import smplx, but make it optional
+try:
+    from smplx import SMPL as _SMPL
+    from smplx.utils import ModelOutput, SMPLOutput
+    from smplx.lbs import vertices2joints
+    SMPLX_AVAILABLE = True
+except ImportError:
+    SMPLX_AVAILABLE = False
+    print("Warning: smplx not available. SMPL mesh functionality will be disabled.")
 
 
 # Map joints to SMPL joints
@@ -55,34 +62,42 @@ H36M_TO_J17 = [6, 5, 4, 1, 2, 3, 16, 15, 14, 11, 12, 13, 8, 10, 0, 7, 9]
 H36M_TO_J14 = H36M_TO_J17[:14]
 
 
-class SMPL(_SMPL):
-    """ Extension of the official SMPL implementation to support more joints """
+if SMPLX_AVAILABLE:
+    class SMPL(_SMPL):
+        """ Extension of the official SMPL implementation to support more joints """
 
-    def __init__(self, *args, **kwargs):
-        super(SMPL, self).__init__(*args, **kwargs)
-        joints = [JOINT_MAP[i] for i in JOINT_NAMES]
-        self.smpl_mean_params = osp.join(args[0], 'smpl_mean_params.npz')
-        J_regressor_extra = np.load(osp.join(args[0], 'J_regressor_extra.npy'))
-        self.register_buffer('J_regressor_extra', torch.tensor(J_regressor_extra, dtype=torch.float32))
-        J_regressor_h36m = np.load(osp.join(args[0], 'J_regressor_h36m_correct.npy'))
-        self.register_buffer('J_regressor_h36m', torch.tensor(J_regressor_h36m, dtype=torch.float32))
-        self.joint_map = torch.tensor(joints, dtype=torch.long)
+        def __init__(self, *args, **kwargs):
+            super(SMPL, self).__init__(*args, **kwargs)
+            joints = [JOINT_MAP[i] for i in JOINT_NAMES]
+            self.smpl_mean_params = osp.join(args[0], 'smpl_mean_params.npz')
+            J_regressor_extra = np.load(osp.join(args[0], 'J_regressor_extra.npy'))
+            self.register_buffer('J_regressor_extra', torch.tensor(J_regressor_extra, dtype=torch.float32))
+            J_regressor_h36m = np.load(osp.join(args[0], 'J_regressor_h36m_correct.npy'))
+            self.register_buffer('J_regressor_h36m', torch.tensor(J_regressor_h36m, dtype=torch.float32))
+            self.joint_map = torch.tensor(joints, dtype=torch.long)
 
-    def forward(self, *args, **kwargs):
-        kwargs['get_skin'] = True
-        smpl_output = super(SMPL, self).forward(*args, **kwargs)
-        extra_joints = vertices2joints(self.J_regressor_extra, smpl_output.vertices)
-        joints = torch.cat([smpl_output.joints, extra_joints], dim=1)
-        joints = joints[:, self.joint_map, :]
-        output = SMPLOutput(vertices=smpl_output.vertices,
-                            global_orient=smpl_output.global_orient,
-                            body_pose=smpl_output.body_pose,
-                            joints=joints,
-                            betas=smpl_output.betas,
-                            full_pose=smpl_output.full_pose)
-        return output
+        def forward(self, *args, **kwargs):
+            kwargs['get_skin'] = True
+            smpl_output = super(SMPL, self).forward(*args, **kwargs)
+            extra_joints = vertices2joints(self.J_regressor_extra, smpl_output.vertices)
+            joints = torch.cat([smpl_output.joints, extra_joints], dim=1)
+            joints = joints[:, self.joint_map, :]
+            output = SMPLOutput(vertices=smpl_output.vertices,
+                                global_orient=smpl_output.global_orient,
+                                body_pose=smpl_output.body_pose,
+                                joints=joints,
+                                betas=smpl_output.betas,
+                                full_pose=smpl_output.full_pose)
+            return output
 
-
-def get_smpl_faces():
-    smpl = SMPL(SMPL_MODEL_DIR, batch_size=1, create_transl=False)
-    return smpl.faces
+    def get_smpl_faces():
+        smpl = SMPL(SMPL_MODEL_DIR, batch_size=1, create_transl=False)
+        return smpl.faces
+else:
+    # Fallback when smplx is not available
+    class SMPL:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("smplx is not available. Please install smplx for mesh functionality.")
+    
+    def get_smpl_faces():
+        raise ImportError("smplx is not available. SMPL faces cannot be retrieved without smplx.")

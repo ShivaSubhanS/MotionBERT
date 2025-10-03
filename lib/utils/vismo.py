@@ -5,13 +5,19 @@ import math
 import copy
 import imageio
 import io
+import pathlib
 from tqdm import tqdm
 from PIL import Image
 from lib.utils.tools import ensure_dir
 import matplotlib
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from lib.utils.utils_smpl import *
+try:
+    from lib.utils.utils_smpl import *
+    SMPL_UTILS_AVAILABLE = True
+except ImportError:
+    SMPL_UTILS_AVAILABLE = False
+    print("Warning: SMPL utilities not available. Mesh rendering will be disabled.")
 import ipdb
 
 def render_and_save(motion_input, save_path, keep_imgs=False, fps=25, color="#F96706#FB8D43#FDB381", with_conf=False, draw_face=False):
@@ -30,6 +36,8 @@ def render_and_save(motion_input, save_path, keep_imgs=False, fps=25, color="#F9
         motion_full[:,:2,:] = pixel2world_vis_motion(motion_full[:,:2,:])
         motion2video(motion_full, save_path=save_path, colors=colors, fps=fps)
     elif motion.shape[0]==6890:
+        if not SMPL_UTILS_AVAILABLE:
+            raise ImportError("SMPL utilities not available. Cannot render mesh data. Please install smplx for mesh functionality.")
         # motion_world = pixel2world_vis_motion(motion, dim=3)
         motion2video_mesh(motion, save_path=save_path, keep_imgs=keep_imgs, fps=fps, draw_face=draw_face)
     else:
@@ -285,6 +293,8 @@ def motion2video_3d(motion, save_path, fps=25, keep_imgs = False):
     videowriter.close()
 
 def motion2video_mesh(motion, save_path, fps=25, keep_imgs = False, draw_face=True):
+    if not SMPL_UTILS_AVAILABLE:
+        raise ImportError("SMPL utilities not available. Cannot render mesh data.")
     videowriter = imageio.get_writer(save_path, fps=fps)
     vlen = motion.shape[-1]
     draw_skele = (motion.shape[0]==17)
