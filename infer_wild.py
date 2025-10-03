@@ -22,6 +22,7 @@ def parse_args():
     parser.add_argument('--pixel', action='store_true', help='align with pixle coordinates')
     parser.add_argument('--focus', type=int, default=None, help='target person id')
     parser.add_argument('--clip_len', type=int, default=243, help='clip length for network input')
+    parser.add_argument('--save_video', action='store_true', help='save 3D pose visualization video')
     opts = parser.parse_args()
     return opts
 
@@ -89,9 +90,26 @@ with torch.no_grad():
 
 results_all = np.hstack(results_all)
 results_all = np.concatenate(results_all)
-render_and_save(results_all, '%s/X3D.mp4' % (opts.out_path), keep_imgs=False, fps=fps_in)
+
+# Only save video if requested
+if opts.save_video:
+    print("Saving 3D pose visualization video...")
+    render_and_save(results_all, '%s/X3D.mp4' % (opts.out_path), keep_imgs=False, fps=fps_in)
+else:
+    print("Skipping video generation. Use --save_video to enable.")
+
 if opts.pixel:
     # Convert to pixel coordinates
     results_all = results_all * (min(vid_size) / 2.0)
     results_all[:,:,:2] = results_all[:,:,:2] + np.array(vid_size) / 2.0
+
+print("Saving 3D pose data...")
 np.save('%s/X3D.npy' % (opts.out_path), results_all)
+print(f"3D pose data saved to: {opts.out_path}/X3D.npy")
+
+# Clean up memory and exit faster
+del results_all
+del model_pos
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+print("Processing completed successfully!")
