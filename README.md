@@ -39,6 +39,26 @@ pip install -r requirements.txt
 
 Please refer to [docs/inference.md](docs/inference.md).
 
+### 🎬 Animation Pipeline - Convert Pose Data to Riggable Armature
+
+This repository includes a **production-ready pipeline** to convert MotionBERT pose outputs into riggable armatures for game engines and 3D software!
+
+**Quick Start:**
+```bash
+cd /home/sss/project/pose_3d/MotionBERT
+./run_motionbert_pipeline.sh
+```
+
+**Documentation:**
+- **[GUIDE.md](GUIDE.md)** - Complete guide with tutorials and examples
+- **[RIGGING_GUIDE.md](RIGGING_GUIDE.md)** - Unity/Unreal/Blender workflows  
+- **[HONEST_ASSESSMENT.md](HONEST_ASSESSMENT.md)** - Technical deep dive
+
+**Main Output:** `rigged_character_with_ik.fbx` (616KB)
+- 16-bone armature with IK animation (237 frames)
+- Ready for Unity, Unreal, Maya, Blender
+- Can be skinned to any humanoid character mesh
+
 ### Using MotionBERT for *human-centric* video representations
 
 ```python

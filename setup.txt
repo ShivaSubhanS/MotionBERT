@@ -4,3 +4,5 @@ pip install -r requirements.txt
 download best_epoch.bin and put it to checkpoint/pose3d/FT_MB_lite_MB_ft_h36m_global_lite/best_epoch.bin
 
 python infer_wild.py --config "configs/pose3d/MB_ft_h36m_global.yaml" --vid_path "/home/sss/project/pose_3d/AlphaPose/smallgirl.mp4" --json_path "/home/sss/project/pose_3d/AlphaPose/results_video/alphapose-results.json" --out_path "results"
+
+~/Downloads/blender-4.5.2-linux-x64/blender --background --python BlenderPoseVisualizer.py
