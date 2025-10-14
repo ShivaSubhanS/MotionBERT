@@ -14,7 +14,6 @@ This gives 100% accuracy while maintaining a proper riggable armature.
 import bpy
 import numpy as np
 from mathutils import Vector, Matrix
-import math
 
 def clear_scene():
     bpy.ops.object.select_all(action='SELECT')
@@ -61,10 +60,26 @@ def create_base_armature(first_frame, armature_name="AccurateArmature"):
             bone.parent = parent
         return bone
     
-    # Spine chain
+    # Spine chain - subdivide spine into 4 bones
     root = create_bone('Root', first_frame[ROOT], first_frame[BELLY])
-    spine = create_bone('Spine', first_frame[BELLY], first_frame[NECK], root)
-    neck = create_bone('Neck', first_frame[NECK], first_frame[NOSE], spine)
+    
+    # Calculate spine subdivision points (divide BELLY to NECK into 4 segments)
+    belly_pos = Vector(first_frame[BELLY])
+    neck_pos = Vector(first_frame[NECK])
+    spine_vec = neck_pos - belly_pos
+    
+    spine1_start = belly_pos
+    spine1_end = belly_pos + spine_vec * 0.25
+    spine2_end = belly_pos + spine_vec * 0.50
+    spine3_end = belly_pos + spine_vec * 0.75
+    spine4_end = neck_pos
+    
+    spine1 = create_bone('Spine.001', spine1_start, spine1_end, root)
+    spine2 = create_bone('Spine.002', spine1_end, spine2_end, spine1)
+    spine3 = create_bone('Spine.003', spine2_end, spine3_end, spine2)
+    spine4 = create_bone('Spine.004', spine3_end, spine4_end, spine3)
+    
+    neck = create_bone('Neck', first_frame[NECK], first_frame[NOSE], spine4)
     head = create_bone('Head', first_frame[NOSE], first_frame[HEAD], neck)
     
     # Left arm chain
@@ -125,10 +140,20 @@ def animate_armature_direct(armature_obj, pose_data):
     
     num_frames = pose_data.shape[0]
     
+    # Calculate intermediate spine positions for animation
+    def get_spine_intermediate_pos(frame_data, t):
+        """Get interpolated position along spine at t (0.0 to 1.0)"""
+        belly = Vector(frame_data[BELLY])
+        neck = Vector(frame_data[NECK])
+        return belly + (neck - belly) * t
+    
     # Define bone head targets (which joint controls each bone's head position)
     bone_head_targets = {
         'Root': ROOT,
-        'Spine': BELLY,
+        'Spine.001': BELLY,
+        'Spine.002': lambda f: get_spine_intermediate_pos(pose_data[f], 0.25),
+        'Spine.003': lambda f: get_spine_intermediate_pos(pose_data[f], 0.50),
+        'Spine.004': lambda f: get_spine_intermediate_pos(pose_data[f], 0.75),
         'Neck': NECK,
         'Head': NOSE,
         'Clavicle.L': LSHO,
@@ -147,7 +172,10 @@ def animate_armature_direct(armature_obj, pose_data):
     
     bone_tail_targets = {
         'Root': BELLY,
-        'Spine': NECK,
+        'Spine.001': lambda f: get_spine_intermediate_pos(pose_data[f], 0.25),
+        'Spine.002': lambda f: get_spine_intermediate_pos(pose_data[f], 0.50),
+        'Spine.003': lambda f: get_spine_intermediate_pos(pose_data[f], 0.75),
+        'Spine.004': NECK,
         'Neck': NOSE,
         'Head': HEAD,
         'Clavicle.L': LSHO,
@@ -164,7 +192,7 @@ def animate_armature_direct(armature_obj, pose_data):
         'Shin.R': RANK,
     }
     
-    # Create empties for each joint
+    # Create empties for each joint (17 original joints)
     empties = {}
     for joint_idx in range(17):
         empty = bpy.data.objects.new(f"Target_{joint_idx}", None)
@@ -173,11 +201,46 @@ def animate_armature_direct(armature_obj, pose_data):
         bpy.context.collection.objects.link(empty)
         empties[joint_idx] = empty
         
-        # Animate empties with pose data
+        # Animate empties with pose data - keyframe every 5th frame
+        # Blender will interpolate the intermediate frames
         for frame_idx in range(num_frames):
-            bpy.context.scene.frame_set(frame_idx + 1)
-            empty.location = Vector(pose_data[frame_idx, joint_idx])
-            empty.keyframe_insert(data_path="location", frame=frame_idx + 1)
+            if frame_idx % 5 == 0 or frame_idx == num_frames - 1:  
+                bpy.context.scene.frame_set(frame_idx + 1)
+                empty.location = Vector(pose_data[frame_idx, joint_idx])
+                empty.keyframe_insert(data_path="location", frame=frame_idx + 1)
+        
+        # Set interpolation to BEZIER for smooth animation
+        if empty.animation_data and empty.animation_data.action:
+            for fcurve in empty.animation_data.action.fcurves:
+                for keyframe in fcurve.keyframe_points:
+                    keyframe.interpolation = 'BEZIER'
+                    keyframe.handle_left_type = 'AUTO_CLAMPED'
+                    keyframe.handle_right_type = 'AUTO_CLAMPED'
+    
+    # Create empties for spine intermediate positions
+    spine_empties = {}
+    for spine_t in [0.25, 0.50, 0.75]:
+        empty_name = f"Target_Spine_{int(spine_t*100)}"
+        empty = bpy.data.objects.new(empty_name, None)
+        empty.empty_display_size = 0.02
+        empty.empty_display_type = 'PLAIN_AXES'
+        bpy.context.collection.objects.link(empty)
+        spine_empties[spine_t] = empty
+        
+        # Animate spine empties - keyframe every 5th frame to match
+        for frame_idx in range(num_frames):
+            if frame_idx % 5 == 0 or frame_idx == num_frames - 1:
+                bpy.context.scene.frame_set(frame_idx + 1)
+                empty.location = get_spine_intermediate_pos(pose_data[frame_idx], spine_t)
+                empty.keyframe_insert(data_path="location", frame=frame_idx + 1)
+        
+        # Set interpolation to BEZIER for smooth animation
+        if empty.animation_data and empty.animation_data.action:
+            for fcurve in empty.animation_data.action.fcurves:
+                for keyframe in fcurve.keyframe_points:
+                    keyframe.interpolation = 'BEZIER'
+                    keyframe.handle_left_type = 'AUTO_CLAMPED'
+                    keyframe.handle_right_type = 'AUTO_CLAMPED'
     
     # Enter pose mode and add constraints
     bpy.ops.object.select_all(action='DESELECT')
@@ -186,17 +249,27 @@ def animate_armature_direct(armature_obj, pose_data):
     bpy.ops.object.mode_set(mode='POSE')
     
     for bone_name in armature_obj.pose.bones.keys():
-        if bone_name not in bone_head_targets:
+        if bone_name not in bone_tail_targets:
             continue
             
         pose_bone = armature_obj.pose.bones[bone_name]
+        tail_target = bone_tail_targets[bone_name]
         
         # Add DAMPED_TRACK constraint to point bone at tail target
-        if bone_name in bone_tail_targets:
-            tail_joint = bone_tail_targets[bone_name]
-            constraint = pose_bone.constraints.new('DAMPED_TRACK')
-            constraint.target = empties[tail_joint]
-            constraint.track_axis = 'TRACK_Y'
+        constraint = pose_bone.constraints.new('DAMPED_TRACK')
+        constraint.track_axis = 'TRACK_Y'
+        
+        # Determine which empty to target
+        if callable(tail_target):  # Lambda function for spine intermediate positions
+            # Extract the t value from the bone name
+            if 'Spine.001' in bone_name:
+                constraint.target = spine_empties[0.25]
+            elif 'Spine.002' in bone_name:
+                constraint.target = spine_empties[0.50]
+            elif 'Spine.003' in bone_name:
+                constraint.target = spine_empties[0.75]
+        else:  # Regular joint index
+            constraint.target = empties[tail_target]
     
     # Bake animation
     bpy.ops.object.mode_set(mode='POSE')
@@ -214,6 +287,8 @@ def animate_armature_direct(armature_obj, pose_data):
     bpy.ops.object.mode_set(mode='OBJECT')
     bpy.ops.object.select_all(action='DESELECT')
     for empty in empties.values():
+        empty.select_set(True)
+    for empty in spine_empties.values():
         empty.select_set(True)
     bpy.ops.object.delete()
     
