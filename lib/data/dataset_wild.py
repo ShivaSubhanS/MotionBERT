@@ -12,6 +12,52 @@ import math
 from torch.utils.data import Dataset, DataLoader
 from lib.utils.utils_data import crop_scale
 
+def coco2h36m(x):
+    '''
+        Input: x (T x V x C)
+        
+        COCO: {0-nose 1-Leye 2-Reye 3-Lear 4-Rear 5-Lsho 6-Rsho 7-Lelb 8-Relb 9-Lwri 10-Rwri 11-Lhip 12-Rhip 13-Lkne 14-Rkne 15-Lank 16-Rank}
+        
+        H36M:
+        0: 'root',
+        1: 'rhip',
+        2: 'rkne',
+        3: 'rank',
+        4: 'lhip',
+        5: 'lkne',
+        6: 'lank',
+        7: 'belly',
+        8: 'neck',
+        9: 'nose',
+        10: 'head',
+        11: 'lsho',
+        12: 'lelb',
+        13: 'lwri',
+        14: 'rsho',
+        15: 'relb',
+        16: 'rwri'
+    '''
+    T, V, C = x.shape
+    y = np.zeros([T,17,C])
+    y[:,0,:] = (x[:,11,:] + x[:,12,:]) * 0.5
+    y[:,1,:] = x[:,12,:]
+    y[:,2,:] = x[:,14,:]
+    y[:,3,:] = x[:,16,:]
+    y[:,4,:] = x[:,11,:]
+    y[:,5,:] = x[:,13,:]
+    y[:,6,:] = x[:,15,:]
+    y[:,8,:] = (x[:,5,:] + x[:,6,:]) * 0.5
+    y[:,7,:] = (y[:,0,:] + y[:,8,:]) * 0.5
+    y[:,9,:] = x[:,0,:]
+    y[:,10,:] = (x[:,1,:] + x[:,2,:]) * 0.5
+    y[:,11,:] = x[:,5,:]
+    y[:,12,:] = x[:,7,:]
+    y[:,13,:] = x[:,9,:]
+    y[:,14,:] = x[:,6,:]
+    y[:,15,:] = x[:,8,:]
+    y[:,16,:] = x[:,10,:]
+    return y
+
 def halpe2h36m(x):
     '''
         Input: x (T x V x C)  
@@ -74,7 +120,17 @@ def read_input(json_path, vid_size, scale_range, focus):
         kpts = np.array(item['keypoints']).reshape([-1,3])
         kpts_all.append(kpts)
     kpts_all = np.array(kpts_all)
-    kpts_all = halpe2h36m(kpts_all)
+    
+    # Auto-detect keypoint format based on number of joints
+    num_joints = kpts_all.shape[1]
+    if num_joints == 17:
+        # COCO format
+        kpts_all = coco2h36m(kpts_all)
+    elif num_joints == 26:
+        # Halpe format
+        kpts_all = halpe2h36m(kpts_all)
+    else:
+        raise ValueError(f"Unsupported keypoint format with {num_joints} joints. Expected 17 (COCO) or 26 (Halpe).")
     if vid_size:
         w, h = vid_size
         scale = min(w,h) / 2.0

@@ -3,7 +3,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-data
 /vis*
 !lib/data
 .DS_Store

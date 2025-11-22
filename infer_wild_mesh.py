@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument('--pixel', action='store_true', help='align with pixle coordinates')
     parser.add_argument('--focus', type=int, default=None, help='target person id')
     parser.add_argument('--clip_len', type=int, default=243, help='clip length for network input')
+    parser.add_argument('--render_mesh', action='store_true', help='render and save mesh video (mesh.mp4)')
     opts = parser.parse_args()
     return opts
 
@@ -107,6 +108,7 @@ test_loader = DataLoader(wild_dataset, **testloader_params)
 
 verts_all = []
 reg3d_all = []
+theta_all = []
 with torch.no_grad():
     for batch_input in tqdm(test_loader):
         batch_size, clip_frames = batch_input.shape[:2]
@@ -132,6 +134,7 @@ with torch.no_grad():
         output_flip_back = [{
             'verts': output_flip_verts.reshape(batch_size, clip_frames, -1, 3) * 1000.0,
             'kp_3d': output_flip_kp3d.reshape(batch_size, clip_frames, -1, 3),
+            'theta': torch.cat([output_flip_pose.reshape(batch_size, clip_frames, 72), output_flip_shape.reshape(batch_size, clip_frames, 10)], dim=2)
         }]
         output_final = [{}]
         for k, v in output_flip_back[0].items():
@@ -139,11 +142,14 @@ with torch.no_grad():
         output = output_final
         verts_all.append(output[0]['verts'].cpu().numpy())
         reg3d_all.append(output[0]['kp_3d'].cpu().numpy())
+        theta_all.append(output[0]['theta'].cpu().numpy())
 
 verts_all = np.hstack(verts_all)
 verts_all = np.concatenate(verts_all)
 reg3d_all = np.hstack(reg3d_all)
 reg3d_all = np.concatenate(reg3d_all)
+theta_all = np.hstack(theta_all)
+theta_all = np.concatenate(theta_all)
 
 if opts.ref_3d_motion_path:
     ref_pose = np.load(opts.ref_3d_motion_path)
@@ -153,5 +159,31 @@ if opts.ref_3d_motion_path:
     root_cam = ref_pose[:, :1] * scale
     verts_all = verts_all - reg3d_all[:,:1] + root_cam
 
-render_and_save(verts_all, osp.join(opts.out_path, 'mesh.mp4'), keep_imgs=False, fps=fps_in, draw_face=True)
+# Render mesh video only if requested
+if opts.render_mesh:
+    print('Rendering mesh video...')
+    render_and_save(verts_all, osp.join(opts.out_path, 'mesh.mp4'), keep_imgs=False, fps=fps_in, draw_face=True)
+    print(f'Mesh video saved to {osp.join(opts.out_path, "mesh.mp4")}')
+else:
+    print('Skipping mesh video rendering (use --render_mesh to enable)')
+
+# Save SMPL parameters
+print('Saving SMPL parameters...')
+smpl_params = {
+    'body_pose': theta_all[:, 3:72], # 69 params (joints 1-23)
+    'global_orient': theta_all[:, :3], # 3 params (joint 0)
+    'betas': theta_all[:, 72:], # 10 params
+    'transl': np.zeros((theta_all.shape[0], 3)) # Global translation (not predicted, set to 0)
+}
+
+output_dict = {
+    'smpl_loss': 0.0, # Placeholder
+    'pred_camera': {}, # Placeholder
+    'pred_smpl_params': smpl_params
+}
+
+pkl_path = osp.join(opts.out_path, 'smpl_params.pkl')
+with open(pkl_path, 'wb') as f:
+    pickle.dump(output_dict, f)
+print(f'SMPL parameters saved to {pkl_path}')
 
