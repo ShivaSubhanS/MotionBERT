@@ -1,0 +1,2 @@
+clone repo
+python infer_wild_mesh.py --vid_path "/home/sss/project/pose_3d/AlphaPose/smallgirl.mp4" --json_path "/home/sss/project/pose_3d/AlphaPose/results_video/alphapose-results.json" --out_path "results"
