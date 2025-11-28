@@ -24,6 +24,8 @@ import pickle
 import argparse
 import os
 from scipy.spatial.transform import Rotation as R
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import savgol_filter
 
 # SMPL joint order (24 joints, but body_pose has 23 excluding root):
 # 0: pelvis (root - stored in global_orient)
@@ -35,6 +37,104 @@ from scipy.spatial.transform import Rotation as R
 
 # SMPL-X body joint order (21 joints):
 # Similar to SMPL but excludes hand joints (22, 23)
+
+
+def smooth_rotations(rotations, sigma=1.0, method='gaussian'):
+    """
+    Smooth rotation sequences using quaternion interpolation.
+    
+    Args:
+        rotations: (N, 3) axis-angle rotations or (N, M) for multiple joints
+        sigma: smoothing strength (higher = smoother)
+        method: 'gaussian' or 'savgol'
+    
+    Returns:
+        smoothed: (N, 3) or (N, M) smoothed rotations
+    """
+    if rotations.ndim == 1:
+        rotations = rotations.reshape(-1, 3)
+    
+    num_frames = rotations.shape[0]
+    num_joints = rotations.shape[1] // 3
+    
+    smoothed = np.zeros_like(rotations)
+    
+    for j in range(num_joints):
+        # Extract this joint's rotations
+        joint_rot = rotations[:, j*3:(j+1)*3]
+        
+        # Convert to quaternions for proper interpolation
+        quats = np.zeros((num_frames, 4))
+        for i in range(num_frames):
+            r = R.from_rotvec(joint_rot[i])
+            quats[i] = r.as_quat()  # [x, y, z, w]
+        
+        # Handle quaternion sign flips (q and -q represent same rotation)
+        for i in range(1, num_frames):
+            if np.dot(quats[i], quats[i-1]) < 0:
+                quats[i] = -quats[i]
+        
+        # Smooth each quaternion component
+        if method == 'gaussian':
+            smoothed_quats = np.zeros_like(quats)
+            for k in range(4):
+                smoothed_quats[:, k] = gaussian_filter1d(quats[:, k], sigma=sigma)
+        elif method == 'savgol':
+            window = min(int(sigma * 4) * 2 + 1, num_frames)
+            if window < 5:
+                window = min(5, num_frames)
+            if window % 2 == 0:
+                window += 1
+            polyorder = min(3, window - 1)
+            smoothed_quats = np.zeros_like(quats)
+            for k in range(4):
+                smoothed_quats[:, k] = savgol_filter(quats[:, k], window, polyorder)
+        else:
+            smoothed_quats = quats
+        
+        # Normalize quaternions
+        norms = np.linalg.norm(smoothed_quats, axis=1, keepdims=True)
+        smoothed_quats = smoothed_quats / norms
+        
+        # Convert back to axis-angle
+        for i in range(num_frames):
+            r = R.from_quat(smoothed_quats[i])
+            smoothed[i, j*3:(j+1)*3] = r.as_rotvec()
+    
+    return smoothed
+
+
+def smooth_translations(translations, sigma=1.0, method='gaussian'):
+    """
+    Smooth translation sequences.
+    
+    Args:
+        translations: (N, 3) translations
+        sigma: smoothing strength
+        method: 'gaussian' or 'savgol'
+    
+    Returns:
+        smoothed: (N, 3) smoothed translations
+    """
+    smoothed = np.zeros_like(translations)
+    
+    if method == 'gaussian':
+        for i in range(3):
+            smoothed[:, i] = gaussian_filter1d(translations[:, i], sigma=sigma)
+    elif method == 'savgol':
+        num_frames = translations.shape[0]
+        window = min(int(sigma * 4) * 2 + 1, num_frames)
+        if window < 5:
+            window = min(5, num_frames)
+        if window % 2 == 0:
+            window += 1
+        polyorder = min(3, window - 1)
+        for i in range(3):
+            smoothed[:, i] = savgol_filter(translations[:, i], window, polyorder)
+    else:
+        smoothed = translations.copy()
+    
+    return smoothed
 
 
 def fix_orientation_flips(global_orient, threshold_deg=120):
@@ -266,6 +366,10 @@ def main():
                         help='Gender for SMPL-X model')
     parser.add_argument('--smplx-betas', type=str, default=None,
                         help='Path to SMPLify-X pkl file to use its betas for accurate body shape')
+    parser.add_argument('--smooth', type=float, default=0.0,
+                        help='Smoothing strength (0=none, 1=light, 2=medium, 3=strong). Recommended: 1-2 for sparse data')
+    parser.add_argument('--smooth-method', default='gaussian', choices=['gaussian', 'savgol'],
+                        help='Smoothing method: gaussian (default) or savgol (Savitzky-Golay)')
     args = parser.parse_args()
     
     # Load body shape from SMPLify-X if provided
@@ -299,6 +403,36 @@ def main():
     # Fix orientation flips (180° sudden rotations)
     print(f"\nFixing orientation flips...")
     smpl_params['global_orient'] = fix_orientation_flips(smpl_params['global_orient'], threshold_deg=120)
+    
+    # Apply smoothing if requested
+    if args.smooth > 0:
+        print(f"\nApplying smoothing (strength={args.smooth}, method={args.smooth_method})...")
+        
+        # Smooth global orientation
+        print(f"  Smoothing global orientation...")
+        smpl_params['global_orient'] = smooth_rotations(
+            smpl_params['global_orient'], 
+            sigma=args.smooth, 
+            method=args.smooth_method
+        )
+        
+        # Smooth body pose (all 23 joints)
+        print(f"  Smoothing body pose ({smpl_params['body_pose'].shape[1]//3} joints)...")
+        smpl_params['body_pose'] = smooth_rotations(
+            smpl_params['body_pose'], 
+            sigma=args.smooth, 
+            method=args.smooth_method
+        )
+        
+        # Smooth translation
+        print(f"  Smoothing translation...")
+        smpl_params['transl'] = smooth_translations(
+            smpl_params['transl'], 
+            sigma=args.smooth, 
+            method=args.smooth_method
+        )
+        
+        print(f"  Smoothing complete!")
     
     os.makedirs(args.output, exist_ok=True)
     
