@@ -1,2 +1,9 @@
 clone repo
 python infer_wild_mesh.py --vid_path "/home/sss/project/pose_3d/AlphaPose/smallgirl.mp4" --json_path "/home/sss/project/pose_3d/AlphaPose/results_video/alphapose-results.json" --out_path "results"
+
+python3 convert_smpl_to_smplx.py \
+    --input results/smpl_params.pkl \
+    --output smplx_output \
+    --fps 30 \
+    --gender female \
+    --smplx-betas /home/sss/project/smplifyx-and-openpose-containers/outputs/results/girldance/000.pkl
