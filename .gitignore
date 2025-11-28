@@ -137,3 +137,10 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+smplx_output/
+smplx_blender_addon/
+
+results/
+
+*.blend*

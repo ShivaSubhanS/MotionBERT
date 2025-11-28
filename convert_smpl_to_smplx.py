@@ -23,6 +23,7 @@ import numpy as np
 import pickle
 import argparse
 import os
+from scipy.spatial.transform import Rotation as R
 
 # SMPL joint order (24 joints, but body_pose has 23 excluding root):
 # 0: pelvis (root - stored in global_orient)
@@ -34,6 +35,131 @@ import os
 
 # SMPL-X body joint order (21 joints):
 # Similar to SMPL but excludes hand joints (22, 23)
+
+
+def fix_orientation_flips(global_orient, threshold_deg=120):
+    """
+    Fix sudden 180-degree flips in global orientation.
+    
+    The MotionBERT output sometimes has the character flip orientation
+    where X euler angle jumps from ~±180° to ~0° (or vice versa).
+    When this happens, the Y rotation also becomes incorrect.
+    
+    Strategy:
+    1. Find frames where there's a sudden large rotation change (>threshold)
+    2. Check if this is a flip (X near ±180° jumps to X near 0° or vice versa)
+    3. For flip segments, interpolate Y and Z from surrounding good frames
+    4. Apply 180° X rotation to correct the flip
+    
+    Args:
+        global_orient: (N, 3) axis-angle rotations
+        threshold_deg: angle threshold to detect flips (default 120°)
+    
+    Returns:
+        fixed_orient: (N, 3) corrected axis-angle rotations
+    """
+    fixed_orient = global_orient.copy()
+    num_frames = len(global_orient)
+    threshold_rad = np.deg2rad(threshold_deg)
+    
+    # Convert all to euler angles for analysis
+    eulers = np.zeros((num_frames, 3))
+    for i in range(num_frames):
+        r = R.from_rotvec(global_orient[i])
+        eulers[i] = r.as_euler('XYZ', degrees=True)
+    
+    # Determine reference state from frame 0
+    ref_x_near_180 = abs(eulers[0, 0]) > 90
+    print(f"  Reference frame 0: X={eulers[0,0]:.1f}°, Y={eulers[0,1]:.1f}°, Z={eulers[0,2]:.1f}°")
+    print(f"  Reference X is {'near ±180°' if ref_x_near_180 else 'near 0°'}")
+    
+    # Find flipped frames based on:
+    # 1. Large angular change from previous frame (>threshold)
+    # 2. X angle crossed the 90° boundary (true flip, not smooth rotation)
+    is_flipped = np.zeros(num_frames, dtype=bool)
+    
+    for i in range(1, num_frames):
+        r_prev = R.from_rotvec(fixed_orient[i-1])
+        r_curr = R.from_rotvec(global_orient[i])
+        
+        angle_diff = (r_prev.inv() * r_curr).magnitude()
+        
+        # Check if X crossed boundary
+        prev_x_near_180 = abs(eulers[i-1, 0]) > 90
+        curr_x_near_180 = abs(eulers[i, 0]) > 90
+        
+        # Only mark as flipped if:
+        # - Large angular change (>threshold)
+        # - X boundary was crossed (flip, not smooth rotation)
+        # - The flip goes AWAY from reference state
+        if angle_diff > threshold_rad and prev_x_near_180 != curr_x_near_180:
+            # Check if this frame is in the "wrong" state relative to reference
+            if curr_x_near_180 != ref_x_near_180:
+                is_flipped[i] = True
+    
+    # Propagate flip state forward until we return to normal
+    for i in range(1, num_frames):
+        if is_flipped[i-1]:
+            curr_x_near_180 = abs(eulers[i, 0]) > 90
+            if curr_x_near_180 != ref_x_near_180:
+                is_flipped[i] = True
+    
+    # Find contiguous flipped segments
+    flip_segments = []
+    in_segment = False
+    seg_start = 0
+    
+    for i in range(num_frames):
+        if is_flipped[i] and not in_segment:
+            seg_start = i
+            in_segment = True
+        elif not is_flipped[i] and in_segment:
+            flip_segments.append((seg_start, i - 1))
+            in_segment = False
+    
+    if in_segment:
+        flip_segments.append((seg_start, num_frames - 1))
+    
+    print(f"  Found {len(flip_segments)} flipped segments: {flip_segments}")
+    
+    # Fix each segment
+    for seg_start, seg_end in flip_segments:
+        print(f"  Fixing segment frames {seg_start}-{seg_end}")
+        
+        # Get Y and Z rotation from surrounding good frames for interpolation
+        y_before = eulers[seg_start - 1, 1] if seg_start > 0 else eulers[0, 1]
+        y_after = eulers[seg_end + 1, 1] if seg_end < num_frames - 1 else y_before
+        
+        z_before = eulers[seg_start - 1, 2] if seg_start > 0 else eulers[0, 2]
+        z_after = eulers[seg_end + 1, 2] if seg_end < num_frames - 1 else z_before
+        
+        seg_len = seg_end - seg_start + 1
+        
+        for i in range(seg_start, seg_end + 1):
+            curr_euler = eulers[i].copy()
+            
+            # Flip X by adding/subtracting 180°
+            if curr_euler[0] > 0:
+                new_x = curr_euler[0] - 180
+            else:
+                new_x = curr_euler[0] + 180
+            
+            # Interpolate Y and Z from surrounding good frames
+            t = (i - seg_start) / max(seg_len - 1, 1) if seg_len > 1 else 0.5
+            new_y = y_before + t * (y_after - y_before)
+            new_z = z_before + t * (z_after - z_before)
+            
+            new_euler = np.array([new_x, new_y, new_z])
+            
+            # Convert back to rotation
+            r_new = R.from_euler('XYZ', new_euler, degrees=True)
+            fixed_orient[i] = r_new.as_rotvec()
+    
+    total_fixed = sum(seg_end - seg_start + 1 for seg_start, seg_end in flip_segments)
+    print(f"  Total frames fixed: {total_fixed}")
+    
+    return fixed_orient
+
 
 def convert_smpl_to_smplx_single_frame(body_pose_smpl, global_orient, betas, transl=None):
     """
@@ -169,6 +295,10 @@ def main():
         # Broadcast SMPLify-X betas to all frames (first 10 components)
         smpl_params['betas'] = np.tile(smplx_betas[:10], (num_frames, 1))
         print(f"  Overriding betas with SMPLify-X shape: {smpl_params['betas'].shape}")
+    
+    # Fix orientation flips (180° sudden rotations)
+    print(f"\nFixing orientation flips...")
+    smpl_params['global_orient'] = fix_orientation_flips(smpl_params['global_orient'], threshold_deg=120)
     
     os.makedirs(args.output, exist_ok=True)
     
