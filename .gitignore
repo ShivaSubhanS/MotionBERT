@@ -143,4 +143,5 @@ smplx_blender_addon/
 
 results/
 
-*.blend*
+*.blend
+outputs/

@@ -446,11 +446,11 @@ def main():
             smpl_params['transl'][i]
         )
         
-        pkl_path = os.path.join(args.output, f'frame_{i:04d}.pkl')
-        with open(pkl_path, 'wb') as f:
-            pickle.dump(frame_data, f)
+    #     pkl_path = os.path.join(args.output, f'frame_{i:04d}.pkl')
+    #     with open(pkl_path, 'wb') as f:
+    #         pickle.dump(frame_data, f)
     
-    print(f"  Saved {num_frames} PKL files to {args.output}/frame_XXXX.pkl")
+    # print(f"  Saved {num_frames} PKL files to {args.output}/frame_XXXX.pkl")
     
     # Export animation NPZ file (for Add Animation feature)
     print(f"\nExporting animation NPZ file...")

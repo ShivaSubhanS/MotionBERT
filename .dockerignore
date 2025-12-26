@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Large files/directories (mount these instead)
+checkpoint/
+data/
+results/
+smplx_output/
+*.pth
+*.pkl
+*.weights
+*.blend
+*.mp4
+*.npz
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
