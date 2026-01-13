@@ -29,7 +29,7 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 
 # Add paths for Homogenus
-sys.path.insert(0, '/home/sss/project/pose_3d/homogenus')
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'homogenus'))
 try:
     from homogenus.tf.homogenus_infer import Homogenus_infer
     HOMOGENUS_AVAILABLE = True
@@ -325,7 +325,7 @@ def predict_gender_with_homogenus(video_file, keypoint_file, fallback_gender='ma
             print(f"    Created temporary keypoint file with {len(target_detections)} detections")
             
             # Initialize Homogenus
-            homogenus_model_dir = "/home/sss/project/pose_3d/homogenus/homogenus/trained_models/tf"
+            homogenus_model_dir = os.path.join(os.path.dirname(__file__), '..', 'homogenus', 'homogenus', 'trained_models', 'tf')
             hg = Homogenus_infer(trained_model_dir=homogenus_model_dir)
             
             # Predict gender - override the frame naming to match the keypoint data
@@ -549,7 +549,7 @@ def main():
         if keypoint_file is None:
             # Look for AlphaPose results
             possible_paths = [
-                '/home/sss/project/pose_3d/AlphaPose/results_video/alphapose-results.json',
+                os.path.join(os.path.dirname(__file__), '..', 'AlphaPose', 'results_video', 'alphapose-results.json'),
                 os.path.join(os.path.dirname(args.input), 'alphapose-results.json'),
                 os.path.join(os.path.dirname(args.input), '..', 'AlphaPose', 'results_video', 'alphapose-results.json')
             ]
