@@ -23,9 +23,19 @@ import numpy as np
 import pickle
 import argparse
 import os
+import sys
 from scipy.spatial.transform import Rotation as R
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
+
+# Add paths for Homogenus
+sys.path.insert(0, '/home/sss/project/pose_3d/homogenus')
+try:
+    from homogenus.tf.homogenus_infer import Homogenus_infer
+    HOMOGENUS_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import Homogenus: {e}")
+    HOMOGENUS_AVAILABLE = False
 
 # SMPL joint order (24 joints, but body_pose has 23 excluding root):
 # 0: pelvis (root - stored in global_orient)
@@ -261,6 +271,115 @@ def fix_orientation_flips(global_orient, threshold_deg=120):
     return fixed_orient
 
 
+def predict_gender_with_homogenus(video_file, keypoint_file, fallback_gender='male'):
+    """
+    Predict gender using Homogenus with fallback to specified gender.
+    
+    Args:
+        video_file: Path to the video file
+        keypoint_file: Path to AlphaPose keypoint JSON file  
+        fallback_gender: Gender to use if prediction fails (default 'male')
+    
+    Returns:
+        str: Predicted gender ('male' or 'female')
+    """
+    if not HOMOGENUS_AVAILABLE:
+        print(f"  Homogenus not available, using fallback gender: {fallback_gender}")
+        return fallback_gender
+        
+    try:
+        print(f"  Predicting gender using Homogenus...")
+        print(f"    Video file: {video_file}")
+        print(f"    Keypoint file: {keypoint_file}")
+        
+        # Load the keypoint file to check what image_ids exist
+        import json
+        with open(keypoint_file, 'r') as f:
+            keypoint_data = json.load(f)
+        
+        # Find the first available detection to use as reference
+        if keypoint_data and len(keypoint_data) > 0:
+            # Get first detection's image_id to use as frame reference
+            first_detection = keypoint_data[0]
+            target_image_id = first_detection['image_id']
+            print(f"    Using keypoint data for frame: {target_image_id}")
+            
+            # Create a subset keypoint file with only the first frame's detections
+            import tempfile
+            import os
+            
+            # Filter detections for the target frame
+            target_detections = [d for d in keypoint_data if d['image_id'] == target_image_id]
+            
+            if len(target_detections) == 0:
+                print(f"    No detections found for {target_image_id}, using fallback: {fallback_gender}")
+                return fallback_gender
+                
+            # Create temporary keypoint file with just this frame's data
+            temp_keypoint_dir = tempfile.mkdtemp(prefix="homogenus_keypoints_")
+            temp_keypoint_file = os.path.join(temp_keypoint_dir, 'alphapose-results.json')
+            
+            with open(temp_keypoint_file, 'w') as f:
+                json.dump(target_detections, f)
+            
+            print(f"    Created temporary keypoint file with {len(target_detections)} detections")
+            
+            # Initialize Homogenus
+            homogenus_model_dir = "/home/sss/project/pose_3d/homogenus/homogenus/trained_models/tf"
+            hg = Homogenus_infer(trained_model_dir=homogenus_model_dir)
+            
+            # Predict gender - override the frame naming to match the keypoint data
+            # Extract frame from video and save with the correct name
+            import cv2
+            import shutil
+            
+            cap = cv2.VideoCapture(video_file)
+            if not cap.isOpened():
+                print(f"    Could not open video file, using fallback: {fallback_gender}")
+                return fallback_gender
+                
+            ret, frame = cap.read()
+            cap.release()
+            
+            if not ret:
+                print(f"    Could not read video frame, using fallback: {fallback_gender}")
+                return fallback_gender
+            
+            # Save frame with the correct filename to match keypoint data
+            temp_image_dir = tempfile.mkdtemp(prefix="homogenus_images_")
+            temp_image_file = os.path.join(temp_image_dir, target_image_id)
+            cv2.imwrite(temp_image_file, frame)
+            
+            # Predict gender
+            results = hg.predict_genders(
+                images_indir=temp_image_dir,
+                openpose_indir=temp_keypoint_dir,
+                pose_format='alphapose',
+                video_file=None,  # Don't use video since we've extracted the frame
+                images_outdir=None,  # Don't save images
+                openpose_outdir=None  # Don't save augmented keypoints
+            )
+            
+            # Cleanup temporary directories
+            shutil.rmtree(temp_keypoint_dir)
+            shutil.rmtree(temp_image_dir)
+            
+            # Extract gender from results
+            for image_name, genders in results.items():
+                if genders and len(genders) > 0:
+                    predicted_gender = genders[0]['gender']
+                    print(f"    Homogenus prediction: {predicted_gender}")
+                    return predicted_gender
+                    
+        print(f"    No valid detections found, using fallback: {fallback_gender}")
+        return fallback_gender
+        
+    except Exception as e:
+        print(f"    Error during gender prediction: {e}")
+        print(f"    Using fallback gender: {fallback_gender}")
+        return fallback_gender
+
+
 def convert_smpl_to_smplx_single_frame(body_pose_smpl, global_orient, betas, transl=None):
     """
     Convert a single frame of SMPL params to SMPL-X format.
@@ -300,12 +419,16 @@ def convert_smpl_to_smplx_single_frame(body_pose_smpl, global_orient, betas, tra
     return result
 
 
-def convert_smpl_to_smplx_animation(smpl_params):
+def convert_smpl_to_smplx_animation(smpl_params, gender='male'):
     """
     Convert full animation sequence for use with SMPL-X Blender addon's 
     "Add Animation" feature (SMPL-X format .npz).
     
     Returns data in AMASS/SMPL-X animation format.
+    
+    Args:
+        smpl_params: Dictionary with SMPL parameters
+        gender: Gender for the animation ('male' or 'female')
     """
     body_pose = smpl_params['body_pose']  # (N, 69)
     global_orient = smpl_params['global_orient']  # (N, 3)
@@ -336,7 +459,7 @@ def convert_smpl_to_smplx_animation(smpl_params):
     
     result = {
         'trans': transl,
-        'gender': 'female',  # Using female as requested
+        'gender': gender,  # Use predicted gender
         'mocap_framerate': 30,  # Default framerate
         'betas': avg_betas,
         'poses': poses,
@@ -362,8 +485,14 @@ def main():
     parser.add_argument('-i', '--input', required=True, help='Input pkl file from MotionBERT')
     parser.add_argument('-o', '--output', required=True, help='Output directory')
     parser.add_argument('--fps', type=int, default=30, help='Framerate for animation')
-    parser.add_argument('--gender', default='female', choices=['female', 'male', 'neutral'], 
-                        help='Gender for SMPL-X model')
+    parser.add_argument('--gender', default=None, choices=['female', 'male', 'neutral'], 
+                        help='Gender for SMPL-X model (if not specified, will use Homogenus to predict)')
+    parser.add_argument('--video-file', type=str, default=None,
+                        help='Path to video file for gender prediction (auto-detected if not provided)')
+    parser.add_argument('--keypoint-file', type=str, default=None,
+                        help='Path to AlphaPose keypoint JSON file for gender prediction (auto-detected if not provided)')
+    parser.add_argument('--fallback-gender', default='male', choices=['female', 'male', 'neutral'],
+                        help='Fallback gender if Homogenus prediction fails (default: male)')
     parser.add_argument('--smplx-betas', type=str, default=None,
                         help='Path to SMPLify-X pkl file to use its betas for accurate body shape')
     parser.add_argument('--smooth', type=float, default=0.0,
@@ -392,6 +521,57 @@ def main():
     
     num_frames = smpl_params['body_pose'].shape[0]
     print(f"  - Total frames: {num_frames}")
+    
+    # Determine gender using Homogenus if not manually specified
+    if args.gender is None:
+        print(f"\nPredicting gender using Homogenus...")
+        
+        # Auto-detect video file if not provided
+        video_file = args.video_file
+        if video_file is None:
+            # Look for the original high-res video first (for AlphaPose keypoints), then fallback to others
+            input_dir = os.path.dirname(args.input)
+            for video_name in ['mapping*.mp4', 'mesh.mp4', 'X3D.mp4']:
+                video_path = os.path.join(input_dir, video_name)
+                if '*' in video_name:
+                    # Use glob for pattern matching
+                    import glob
+                    matches = glob.glob(video_path)
+                    if matches:
+                        video_file = matches[0]
+                        break
+                elif os.path.exists(video_path):
+                    video_file = video_path
+                    break
+        
+        # Auto-detect keypoint file if not provided  
+        keypoint_file = args.keypoint_file
+        if keypoint_file is None:
+            # Look for AlphaPose results
+            possible_paths = [
+                '/home/sss/project/pose_3d/AlphaPose/results_video/alphapose-results.json',
+                os.path.join(os.path.dirname(args.input), 'alphapose-results.json'),
+                os.path.join(os.path.dirname(args.input), '..', 'AlphaPose', 'results_video', 'alphapose-results.json')
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    keypoint_file = path
+                    break
+        
+        # Predict gender
+        if video_file and keypoint_file:
+            gender = predict_gender_with_homogenus(video_file, keypoint_file, args.fallback_gender)
+        else:
+            print(f"  Could not find video or keypoint files for gender prediction")
+            print(f"    Video file: {video_file}")
+            print(f"    Keypoint file: {keypoint_file}")
+            print(f"  Using fallback gender: {args.fallback_gender}")
+            gender = args.fallback_gender
+    else:
+        gender = args.gender
+        print(f"\nUsing manually specified gender: {gender}")
+
+    print(f"Final gender selection: {gender}")
     
     # Override betas with SMPLify-X betas if provided
     if smplx_betas is not None:
@@ -454,8 +634,7 @@ def main():
     
     # Export animation NPZ file (for Add Animation feature)
     print(f"\nExporting animation NPZ file...")
-    anim_data = convert_smpl_to_smplx_animation(smpl_params)
-    anim_data['gender'] = args.gender
+    anim_data = convert_smpl_to_smplx_animation(smpl_params, gender)
     anim_data['mocap_framerate'] = args.fps
     
     npz_path = os.path.join(args.output, 'animation.npz')
@@ -465,7 +644,7 @@ def main():
     print(f"\nDone! Files saved to: {args.output}")
     print(f"\nTo use in Blender:")
     print(f"  1. Install the SMPL-X addon")
-    print(f"  2. Add a SMPL-X model (female)")
+    print(f"  2. Add a SMPL-X model ({gender})")
     print(f"  3. Use 'Add Animation' and select {npz_path}")
     print(f"  OR")
     print(f"  3. Use 'Load Pose' with any frame_XXXX.pkl file")
