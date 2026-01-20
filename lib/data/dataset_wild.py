@@ -127,10 +127,15 @@ def read_input(json_path, vid_size, scale_range, focus):
         # COCO format
         kpts_all = coco2h36m(kpts_all)
     elif num_joints == 26:
-        # Halpe format
+        # Halpe body-only format
+        kpts_all = halpe2h36m(kpts_all)
+    elif num_joints == 136:
+        # Halpe wholebody format (26 body + 68 face + 21 left hand + 21 right hand)
+        # Extract only the first 26 body keypoints
+        kpts_all = kpts_all[:, :26, :]
         kpts_all = halpe2h36m(kpts_all)
     else:
-        raise ValueError(f"Unsupported keypoint format with {num_joints} joints. Expected 17 (COCO) or 26 (Halpe).")
+        raise ValueError(f"Unsupported keypoint format with {num_joints} joints. Expected 17 (COCO), 26 (Halpe body), or 136 (Halpe wholebody).")
     if vid_size:
         w, h = vid_size
         scale = min(w,h) / 2.0
